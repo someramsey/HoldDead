@@ -11,7 +11,7 @@ import net.minecraftforge.fml.common.Mod;
 public class ServerEvents {
     @SubscribeEvent
     public static void onServerStarting(ServerStartingEvent event) {
-        RespawnHandler.init(event.getServer().getMaxPlayers());
+        RespawnHandler.init(event.getServer());
     }
 
     @SubscribeEvent

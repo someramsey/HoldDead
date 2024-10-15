@@ -1,13 +1,13 @@
-package com.ramsey.holddead;
+package com.ramsey.holddead.gui;
 
+import com.ramsey.holddead.network.PacketHandler;
+import com.ramsey.holddead.network.packets.InvokeRespawnPacket;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.*;
 import net.minecraft.client.multiplayer.chat.report.ReportingContext;
-import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.level.GameType;
 import org.jetbrains.annotations.NotNull;
 
 import java.lang.reflect.Field;
@@ -65,7 +65,7 @@ public class DeathScreenWrapper extends Screen {
 
         super.render(pGuiGraphics, pMouseX, pMouseY, pPartialTick);
 
-        if (Config.doRespawnTransitions && this.overlayAlpha > 0) {
+        if (this.overlayAlpha > 0) {
             int alpha = Math.round(this.overlayAlpha * 255) << 24;
             int whiteWithAlpha = (WHITE & 0x00FFFFFF) | alpha;
 
@@ -106,7 +106,8 @@ public class DeathScreenWrapper extends Screen {
 
         this.minecraft.player.respawn();
         this.minecraft.setScreen(null);
-        this.minecraft.gameMode.setLocalMode(GameType.SPECTATOR);
+
+        PacketHandler.sendToServer(new InvokeRespawnPacket());
     }
 
     private void exitToTitleScreen() {

@@ -1,14 +1,15 @@
 package com.ramsey.holddead.events;
 
-import com.ramsey.holddead.DeathScreenWrapper;
+import com.ramsey.holddead.gui.DeathScreenWrapper;
 import com.ramsey.holddead.Main;
-import com.ramsey.holddead.RespawnOverlay;
+import com.ramsey.holddead.gui.RespawnOverlay;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.DeathScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
+import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.EventPriority;
@@ -41,6 +42,11 @@ public class ClientEvents {
                     event.setNewScreen(new DeathScreenWrapper(deathScreen));
                 }
             }
+        }
+
+        @SubscribeEvent
+        public static void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
+            RespawnOverlay.setRespawnTime(0);
         }
     }
 }

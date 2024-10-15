@@ -1,145 +1,165 @@
 package com.ramsey.holddead;
 
 import com.ramsey.holddead.network.PacketHandler;
-import com.ramsey.holddead.network.UpdateTimeoutPacket;
+import com.ramsey.holddead.network.packets.RespawnStatePacket;
+import com.ramsey.holddead.network.packets.SyncTimeoutPacket;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 
-import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
+//TODO: Add a mixin to player death and put the local player immeditely in spectator mode on the client side to avoid latency
 public class RespawnHandler {
-    private static ScheduledExecutorService scheduler;
     private static ConcurrentHashMap<UUID, PlayerTimeout> timeouts;
+    private static ScheduledExecutorService scheduler;
+    private static MinecraftServer server;
+    private static boolean initialized = false;
 
-    public static void init(int pMaxPlayers) {
-        scheduler = Executors.newScheduledThreadPool(pMaxPlayers);
-        timeouts = new ConcurrentHashMap<>();
+    public static void init(MinecraftServer pServer) {
+        if (initialized) {
+            return;
+        }
+
+        initialized = true;
+
+        server = pServer;
+        timeouts = new ConcurrentHashMap<>(pServer.getMaxPlayers());
+        scheduler = Executors.newScheduledThreadPool(1);
+        scheduler.scheduleAtFixedRate(RespawnHandler::tick, 0, 1, TimeUnit.SECONDS);
     }
 
-    //TODO: Suscribe and block the player respawn event, cancel it and put the player into spectator mod immediately
-
     public static void dispose() {
+        if (!initialized) {
+            return;
+        }
+
+        initialized = false;
+
+        if (timeouts != null) {
+            timeouts.clear();
+        }
+
         if (scheduler != null) {
             scheduler.shutdown();
         }
 
-        if (timeouts != null) {
-            timeouts.clear();
+        if (server != null) {
+            server = null;
+        }
+    }
+
+    private static void tick() {
+        long currentTimeMillis = System.currentTimeMillis();
+
+        for (PlayerTimeout timeout : timeouts.values()) {
+            if (timeout.canEnd(currentTimeMillis)) {
+                PacketHandler.sendToPlayer(timeout.player, new RespawnStatePacket(RespawnStatePacket.State.BEGIN_RESPAWN));
+                timeout.ended = true;
+            }
         }
     }
 
     public static void timeoutPlayer(ServerPlayer pPlayer) {
         GameType oldGameMode = pPlayer.gameMode.getGameModeForPlayer();
-//        pPlayer.setGameMode(GameType.SPECTATOR); //TODO: add
-
         Level level = pPlayer.level();
         UUID playerUUID = pPlayer.getUUID();
 
-        long ticks = level.getGameTime();
-        PlayerTimeout timeout = new PlayerTimeout(ticks, oldGameMode);
+        int respawnDelay = GameRuleRegistry.getRespawnDelayMillis(level.getGameRules());
+        long currentTimeMillis = System.currentTimeMillis();
 
-        int respawnTime = level.getGameRules().getInt(GameRuleRegistry.RESPAWN_DELAY);
-        timeout.setSchedule(pPlayer, respawnTime / 20);
+        long respawnTime = currentTimeMillis + respawnDelay;
 
+        PlayerTimeout timeout = new PlayerTimeout(respawnTime, oldGameMode, pPlayer);
         timeouts.put(playerUUID, timeout);
 
-        PacketHandler.sendToPlayer(pPlayer, new UpdateTimeoutPacket(respawnTime));
+        pPlayer.setGameMode(GameType.SPECTATOR);
+        PacketHandler.sendToPlayer(pPlayer, new SyncTimeoutPacket(respawnTime));
     }
 
     public static void cancelPlayerTimeout(ServerPlayer pPlayer) {
         UUID playerUUID = pPlayer.getUUID();
 
         if (timeouts.containsKey(playerUUID)) {
-            PlayerTimeout timeout = timeouts.get(playerUUID);
-
-            timeout.cancelSchedule();
             timeouts.remove(playerUUID);
 
-            PacketHandler.sendToPlayer(pPlayer, new UpdateTimeoutPacket(0));
-        }
-    }
-
-    public static void onPlayerLeave(ServerPlayer pPlayer) {
-        UUID playerUUID = pPlayer.getUUID();
-
-        if (timeouts.containsKey(playerUUID)) {
-            PlayerTimeout timeout = timeouts.get(playerUUID);
-            timeout.cancelSchedule();
+            PacketHandler.sendToPlayer(pPlayer, new RespawnStatePacket(RespawnStatePacket.State.CANCEL_RESPAWN));
         }
     }
 
     public static void onPlayerJoin(ServerPlayer pPlayer) {
         UUID playerUUID = pPlayer.getUUID();
-        Level playerLevel = pPlayer.level();
 
         if (timeouts.containsKey(playerUUID)) {
             PlayerTimeout timeout = timeouts.get(playerUUID);
 
-            long currentTime = playerLevel.getGameTime();
-            long timePast = currentTime - timeout.deathTime;
-            int timeLeft = playerLevel.getGameRules().getInt(GameRuleRegistry.RESPAWN_DELAY) - (int) timePast;
-
-            if (timeLeft < 0) {
-                respawnPlayer(pPlayer, timeout.gameMode);
+            if (timeout.ended) {
                 timeouts.remove(playerUUID);
+                respawnPlayer(pPlayer, timeout.gameMode);
+
             } else {
-                timeout.setSchedule(pPlayer, timeLeft);
-                PacketHandler.sendToPlayer(pPlayer, new UpdateTimeoutPacket(timeLeft));
+                timeout.player = pPlayer;
+                PacketHandler.sendToPlayer(pPlayer, new SyncTimeoutPacket(timeout.respawnTime));
             }
         }
     }
 
-    private static BlockPos getSpawnpoint(ServerPlayer player) {
-        return Objects.requireNonNullElseGet(player.getRespawnPosition(), player.level()::getSharedSpawnPos);
+    public static void onAcknowledgePlayerRespawn(ServerPlayer pPlayer) {
+        UUID playerUUID = pPlayer.getUUID();
+
+        if (timeouts.containsKey(playerUUID)) {
+            PlayerTimeout timeout = timeouts.get(playerUUID);
+
+            if(!timeout.ended) {
+                return;
+            }
+
+            respawnPlayer(pPlayer, timeout.gameMode);
+            PacketHandler.sendToPlayer(pPlayer, new RespawnStatePacket(RespawnStatePacket.State.END_RESPAWN));
+
+            timeouts.remove(playerUUID);
+        }
     }
 
-    private static ServerLevel getSpawnLevel(MinecraftServer server, ServerPlayer player) {
-        return Objects.requireNonNullElseGet(server.getLevel(player.getRespawnDimension()), server::overworld);
-    }
+    private static void respawnPlayer(ServerPlayer pPlayer, GameType gameMode) {
+        pPlayer.setGameMode(gameMode);
 
-    private static void respawnPlayer(ServerPlayer pPlayer, GameType pGameMode) {
-        pPlayer.setGameMode(pGameMode);
+        BlockPos blockpos = pPlayer.getRespawnPosition();
+        float angle = pPlayer.getRespawnAngle();
+        ServerLevel serverlevel = server.getLevel(pPlayer.getRespawnDimension());
 
-        MinecraftServer server = pPlayer.getServer();
-
-        if (server == null) {
-            return;
+        if (serverlevel == null) {
+            serverlevel = server.overworld();
         }
 
-        BlockPos spawnpos = getSpawnpoint(pPlayer);
-        ServerLevel level = getSpawnLevel(server, pPlayer);
+        if(blockpos == null) {
+            blockpos = serverlevel.getSharedSpawnPos();
+        }
 
-        pPlayer.teleportTo(level, spawnpos.getX(), spawnpos.getY(), spawnpos.getZ(), 0, 0);
-        pPlayer.setDeltaMovement(0, 0, 0);
+        pPlayer.teleportTo(serverlevel, blockpos.getX() + 0.5D, blockpos.getY(), blockpos.getZ() + 0.5D, angle, 0.0F);
     }
 
     private static class PlayerTimeout {
-        public ScheduledFuture<?> schedule;
-        public final long deathTime;
+        public final long respawnTime;
         public final GameType gameMode;
+        public ServerPlayer player;
+        public boolean ended;
 
-        private PlayerTimeout(long pDeathTime, GameType pGameMode) {
-            this.deathTime = pDeathTime;
-            this.gameMode = pGameMode;
+        public PlayerTimeout(long respawnTime, GameType gameMode, ServerPlayer player) {
+            this.respawnTime = respawnTime;
+            this.gameMode = gameMode;
+            this.player = player;
         }
 
-        public void setSchedule(ServerPlayer pPlayer, int pTime) {
-            this.schedule = scheduler.schedule(() -> {
-                respawnPlayer(pPlayer, this.gameMode);
-                timeouts.remove(pPlayer.getUUID());
-            }, pTime, TimeUnit.SECONDS);
-        }
-
-        public void cancelSchedule() {
-            this.schedule.cancel(false);
-            this.schedule = null;
+        public boolean canEnd(long currentTimeMillis) {
+            return !ended && respawnTime < currentTimeMillis;
         }
     }
 }

@@ -1,15 +1,11 @@
 package com.ramsey.holddead;
 
-import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.config.ModConfig;
-import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Mod(Main.MODID)
 public class Main {
     public static final String MODID = "holddead";
-
-    public Main() {
-        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, Config.SPEC);
-    }
+    public static final Logger LOGGER = LoggerFactory.getLogger(MODID);
 }
