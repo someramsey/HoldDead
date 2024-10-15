@@ -4,6 +4,12 @@ A minecraft forge mod that puts you in spectator mod after you die, and only res
 
 It's useful if you think keep inventory is useful, but still want to have some penalty for dying.
 
+
+## Preview
+https://github.com/user-attachments/assets/6da657ce-2f6d-42d0-b1cb-f4b2e70b5c7f
+
+
+
 ## Installation
 
 1. Download the latest release from the [releases page](https://github.com/someramsey/HoldDead/releases)
